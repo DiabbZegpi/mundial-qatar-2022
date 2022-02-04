@@ -1,0 +1,106 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+matches <- data.frame(
+  local = c('Argentina', 'Colombia', 'Paraguay', 'Brasil', 'Uruguay',
+            'Perú', 'Ecuador', 'Venezuela', 'Chile', 'Bolivia'),
+  visita = c('Venezuela', 'Bolivia', 'Ecuador', 'Chile', 'Perú', 
+             'Paraguay', 'Argentina', 'Colombia', 'Uruguay', 'Brasil'),
+  jornada = c(rep(17, 5), rep(18, 5))
+)
+
+posiciones <- data.frame(
+  equipo = c('Brasil', 'Argentina', 'Ecuador', 'Uruguay', 'Perú',
+             'Chile', 'Colombia', 'Bolivia', 'Paraguay', 'Venezuela'),
+  puntos = c(39, 35, 25, 22, 21, 19, 17, 15, 13, 10)
+)
+```
+
+```{r}
+library(tidyverse)
+library(here)
+
+resultados <- list()
+for (i in seq_len(1e5)) {
+  posiciones_simul <- posiciones
+  resultados_match <- matches
+  resultados_match$resultado <- replicate(10, sample(c('local', 'visita', 'empate'), 1))
+  resultados_match <- resultados_match %>% 
+    pivot_longer(cols = c(local, visita), values_to = 'equipo') %>% 
+    mutate(puntos = case_when(
+      resultado == name ~ 3,
+      resultado == 'empate' ~ 1,
+      TRUE ~ 0
+    )) %>% 
+    group_by(equipo) %>% 
+    summarise(puntos_totales = sum(puntos))
+  
+  resultados_simul <- posiciones_simul %>% 
+    left_join(resultados_match, by = c('equipo')) %>% 
+    transmute(equipo, puntos = puntos + puntos_totales) %>% 
+    arrange(desc(puntos)) %>% 
+    transmute(equipo, posicion = row_number()) %>% 
+    deframe()
+  
+  resultados[[i]] <- resultados_simul
+}
+```
+
+```{r}
+resultados_tbl <- tibble(resultados = resultados) %>% 
+  mutate(resultados = map(resultados, enframe)) %>% 
+  unnest(resultados) 
+
+resultados_tbl <- resultados_tbl %>% 
+  group_by(name) %>% 
+  summarise(clasifica = mean(value <= 4),
+            repechaje = mean(value == 5),
+            eliminado = mean(value > 5),
+            .groups = 'drop') %>% 
+  rename(equipo = name)
+  
+
+plot_data <- posiciones %>% 
+  inner_join(resultados_tbl, by = c('equipo')) %>% 
+  mutate(equipo = fct_reorder(equipo, puntos)) %>% 
+  pivot_longer(cols = -c(equipo, puntos)) %>% 
+  mutate(name = fct_inorder(name)) %>% 
+  filter(value > 0) 
+  
+labels <- plot_data %>% 
+  group_by(equipo) %>% 
+  mutate(x = cumsum(value) - value / 2,
+         label = paste0(round(value, 2) * 100, '%'),
+         value = x) %>%
+  ungroup()
+
+theme_set(theme_minimal())
+
+p <- plot_data %>% 
+  ggplot(aes(value, equipo, fill = reorder(name, desc(name)))) +
+  geom_col(position = position_stack(), color = 'black') +
+  geom_text(data = labels, aes(label = label), size = 5) +
+  scale_fill_brewer(palette = 'RdBu') +
+  labs(x = NULL, y = NULL, fill = NULL,
+       title = 'Probabilidad de clasificar a Qatar 2022',
+       caption = 'Resultados obtenidos con simulación Monte Carlo\nDiabb Zegpi D. | Actualizado al 02 de febrero') +
+  theme(legend.position = 'bottom',
+        text = element_text(size = 16),
+        plot.title = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 1, face = 2),
+        panel.grid = element_blank(),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(margin = margin(r = -15)))
+
+ggsave(plot = p, filename = here('mundial.png'),
+       width = 9, dpi = 500)
+
+```
+
+```{r}
+saveRDS(resultados, file = here('resultados.rds'))
+```
+
